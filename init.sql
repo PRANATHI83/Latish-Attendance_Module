@@ -1,11 +1,5 @@
--- Create the database
-CREATE DATABASE employee_attendance;
-
--- Connect to the new database
-\c employee_attendance
-
 -- Create the punch_records table
-CREATE TABLE punch_records (
+CREATE TABLE IF NOT EXISTS punch_records (
     id SERIAL PRIMARY KEY,
     employee_id VARCHAR(7) NOT NULL CHECK (employee_id ~ '^ATS0(?!000)\d{3}$'),
     status VARCHAR(3) NOT NULL CHECK (status IN ('in', 'out')),
@@ -17,4 +11,4 @@ CREATE TABLE punch_records (
 );
 
 -- Create index for faster queries on employee_id and date
-CREATE INDEX idx_employee_id_date ON punch_records (employee_id, date);
+CREATE INDEX IF NOT EXISTS idx_employee_id_date ON punch_records (employee_id, date);
