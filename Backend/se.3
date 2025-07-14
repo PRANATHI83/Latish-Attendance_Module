@@ -15,8 +15,17 @@ const pool = new Pool({
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'DELETE'],
+}));
 app.use(express.json());
+
+// Request logger
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+});
 
 // Validate Employee ID
 function validateEmployeeId(employeeId) {
@@ -31,11 +40,10 @@ function calculateWorkingHours(inTime, outTime) {
     const [inH, inM, inS] = inTime.split(':').map(Number);
     const [outH, outM, outS] = outTime.split(':').map(Number);
 
-    const inTimeMinutes = inH * 60 + inM + inS / 60;
-    const outTimeMinutes = outH * 60 + outM + outS / 60;
+    const inMinutes = inH * 60 + inM + inS / 60;
+    const outMinutes = outH * 60 + outM + outS / 60;
 
-    const diffMinutes = outTimeMinutes - inTimeMinutes;
-    return diffMinutes / 60;
+    return (outMinutes - inMinutes) / 60;
 }
 
 // Determine attendance status
@@ -54,26 +62,26 @@ app.post('/api/punch', async (req, res) => {
     }
 
     try {
-        const latestRecord = await pool.query(
+        const latest = await pool.query(
             'SELECT status, timestamp FROM punch_records WHERE employee_id = $1 AND date = CURRENT_DATE ORDER BY timestamp DESC LIMIT 1',
             [employeeId]
         );
 
-        const currentStatus = latestRecord.rows.length > 0 ? latestRecord.rows[0].status : 'out';
+        const currentStatus = latest.rows.length > 0 ? latest.rows[0].status : 'out';
         const newStatus = currentStatus === 'in' ? 'out' : 'in';
         const now = new Date();
-        const timestamp = now.toISOString().split('T')[1].split('.')[0]; // Format: "HH:MM:SS"
+        const timestamp = now.toTimeString().split(' ')[0]; // Format HH:MM:SS
 
         let hoursWorked = null;
         let attendanceStatus = null;
 
-        if (newStatus === 'out' && latestRecord.rows.length > 0) {
-            const punchInTime = latestRecord.rows[0].timestamp;
-            hoursWorked = calculateWorkingHours(punchInTime, timestamp);
+        if (newStatus === 'out' && latest.rows.length > 0) {
+            const inTime = latest.rows[0].timestamp.toTimeString().split(' ')[0];
+            hoursWorked = calculateWorkingHours(inTime, timestamp);
             attendanceStatus = determineAttendanceStatus(hoursWorked);
         }
 
-        const result = await pool.query(
+        const insertResult = await pool.query(
             'INSERT INTO punch_records (employee_id, status, timestamp, date, hours_worked, attendance_status) VALUES ($1, $2, $3, CURRENT_DATE, $4, $5) RETURNING *',
             [employeeId, newStatus, timestamp, hoursWorked, attendanceStatus]
         );
@@ -84,7 +92,7 @@ app.post('/api/punch', async (req, res) => {
             timestamp,
             date: now.toISOString().split('T')[0],
             hoursWorked,
-            attendanceStatus
+            attendanceStatus,
         });
     } catch (err) {
         console.error('Error processing punch:', err);
@@ -110,10 +118,7 @@ app.get('/api/status/:employeeId', async (req, res) => {
             return res.json({ status: 'out', timestamp: null });
         }
 
-        res.json({
-            status: result.rows[0].status,
-            timestamp: result.rows[0].timestamp
-        });
+        res.json(result.rows[0]);
     } catch (err) {
         console.error('Error fetching status:', err);
         res.status(500).json({ error: 'Server error' });
@@ -133,7 +138,7 @@ app.get('/api/records', async (req, res) => {
         const conditions = [];
 
         if (employeeId) {
-            if (!validateEmployeeId(employeeId) && !employeeId.match(/^\w+$/)) {
+            if (!employeeId.match(/^ATS0\d{0,3}$/)) {
                 return res.status(400).json({ error: 'Invalid Employee ID format' });
             }
             conditions.push(`employee_id ILIKE $${values.length + 1}`);
@@ -142,7 +147,7 @@ app.get('/api/records', async (req, res) => {
 
         if (date) {
             if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                return res.status(400).json({ error: 'Invalid date format' });
+                return res.status(400).json({ error: 'Invalid date format (YYYY-MM-DD expected)' });
             }
             conditions.push(`date = $${values.length + 1}`);
             values.push(date);
@@ -166,7 +171,7 @@ app.get('/api/records', async (req, res) => {
 app.delete('/api/records', async (req, res) => {
     const { employeeIds } = req.body;
 
-    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+    if (!Array.isArray(employeeIds) || employeeIds.length === 0) {
         return res.status(400).json({ error: 'No employee IDs provided' });
     }
 
@@ -178,7 +183,7 @@ app.delete('/api/records', async (req, res) => {
 
         res.json({
             message: `${result.rowCount} record(s) deleted`,
-            deletedRecords: result.rows
+            deletedRecords: result.rows,
         });
     } catch (err) {
         console.error('Error deleting records:', err);
